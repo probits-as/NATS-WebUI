@@ -1,20 +1,21 @@
 [package]
 name = "nats-webui"
-version = "0.1.1"
+version = "0.2.0"
 authors = ["Theodore Lee <sphqxelzlt@gmail.com>", "Jens Thiel <thielj@gmail.com>"]
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rants = { git = "https://github.com/sphqxe/rants.git", branch = "subject-constructor" }
-tokio = { version = "0.2", features = ["macros", "full", "rt-core", "sync", "time"] }
-warp = "0.2"
+async-nats = "0.37.0"
+
+tokio = { version = "1.41.0", features = ["full"] }
+warp = "0.3"
 log = "0.4"
-simple_logger="1.0"
+simple_logger="5.0"
 chrono = { version = "0.4", features = ["serde"] }
 serde = "1.0"
-reqwest = { version = "0.10", features = ["json"] }
+reqwest = { version = "0.12.8", features = ["json"] }
 rusqlite = "0.21"
 serde_json = "1.0"
 http = "0.2"

@@ -1,4 +1,4 @@
-use rants::{Subject, SubjectBuilder};
+use log::{debug, error};
 use reqwest;
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +25,7 @@ pub struct NatsServer {
     pub host: String,
     pub port: u16,
     pub monitoring_port: u16,
+    pub token: Option<String>,
     pub varz: Option<ServerVarz>,
     pub subjects: Vec<SubjectTreeNode>,
     pub publications: Vec<Publication>,
@@ -36,28 +37,36 @@ impl NatsServer {
         host: String,
         port: u16,
         client: &reqwest::Client,
-    ) -> reqwest::Result<VarzBroadcastMessage> {
-        let varz = client
+    ) -> Result<VarzBroadcastMessage, VarzError> {
+        let response = client
             .get(&format!("http://{}:{}/varz", host, port))
             .send()
-            .await?
-            .json::<ServerVarz>()
             .await?;
-        // info!("{:?}", varz);
+
+        response.error_for_status_ref()?;
+
+        let json_text = response.text().await?;
+        debug!("Raw VARZ JSON: {}", json_text);
+
+        let varz: ServerVarz = serde_json::from_str(&json_text).map_err(|e| {
+            error!("Failed to parse VARZ JSON: {:?}", e);
+            VarzError::from(e)
+        })?;
+
         Ok(VarzBroadcastMessage {
             server_id: id,
-            varz: varz,
+            varz,
         })
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct VarzBroadcastMessage {
-    server_id: i64,
+    pub server_id: i64,
     varz: ServerVarz,
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct SubjectTreeNode {
     id: String,
     subject_str: String,
@@ -66,32 +75,16 @@ pub struct SubjectTreeNode {
 }
 
 impl SubjectTreeNode {
-    fn get_subscriptions(&self, tokens: &mut Vec<String>, subscriptions: &mut Vec<Subject>) {
-        tokens.push(self.subject_str.clone());
-        let mut builder = SubjectBuilder::new();
-
-        if self.selected {
-            for token in tokens.iter() {
-                builder = builder.add(token.clone());
-            }
-            subscriptions.push(builder.build());
+    pub fn flatten(&self) -> Vec<String> {
+        let mut result = vec![self.subject_str.clone()];
+        for child in &self.subjects {
+            result.extend(child.flatten());
         }
-
-        if !self.subjects.is_empty() {
-            for s in self.subjects.iter() {
-                s.get_subscriptions(tokens, subscriptions);
-            }
-        }
-
-        tokens.pop();
+        result
     }
-}
 
-impl Into<Vec<rants::Subject>> for SubjectTreeNode {
-    fn into(self) -> Vec<Subject> {
-        let (mut tokens, mut subs) = (Vec::new(), Vec::new());
-        self.get_subscriptions(&mut tokens, &mut subs);
-        subs
+    pub fn get_subscriptions(&self) -> Vec<String> {
+        self.flatten()
     }
 }
 
@@ -103,58 +96,138 @@ pub struct Publication {
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct ServerVarz {
-    server_id: String,
-    server_name: String,
-    version: String,
-    proto: u64,
-    git_commit: String,
-    go: String,
-    host: String,
-    port: u16,
-    max_connections: u64,
-    ping_interval: u64,
-    ping_max: u64,
-    http_host: String,
-    http_port: u16,
-    https_port: u16,
-    auth_timeout: u64,
-    max_control_line: u64,
-    max_payload: u64,
-    max_pending: u64,
-    cluster: ServerCluster,
-    tls_timeout: f64,
-    write_deadline: u64,
-    start: String,
-    now: String,
-    uptime: String,
-    mem: u64,
-    cores: u64,
-    cpu: u8,
-    connections: u64,
-    total_connections: u64,
-    routes: u64,
-    remotes: u64,
-    leafnodes: u64,
-    in_msgs: u64,
-    out_msgs: u64,
-    in_bytes: u64,
-    out_bytes: u64,
-    slow_consumers: u64,
-    subscriptions: u64,
-    config_load_time: String,
-    // http_req_stats:
-    // gateway:
-    // leaf:
+    pub server_id: String,
+    pub server_name: String,
+    pub version: String,
+    pub proto: i32,
+    pub go: String,
+    pub host: String,
+    pub port: u16,
+    pub max_connections: i64,
+    pub ping_interval: i64,
+    pub ping_max: i64,
+    pub http_host: String,
+    pub http_port: u16,
+    pub https_port: u16,
+    pub auth_timeout: i64,
+    pub max_control_line: i64,
+    pub max_payload: i64,
+    pub max_pending: i64,
+    #[serde(default)]
+    pub cluster: Option<ClusterInfo>,
+    #[serde(default)]
+    pub gateway: Option<serde_json::Value>,
+    #[serde(default)]
+    pub leaf: Option<serde_json::Value>,
+    #[serde(default)]
+    pub mqtt: Option<MqttConfig>,
+    #[serde(default)]
+    pub websocket: Option<serde_json::Value>,
+    #[serde(default)]
+    pub jetstream: Option<JetstreamConfig>,
+    pub tls_timeout: i64,
+    pub write_deadline: i64,
+    pub start: String,
+    pub now: String,
+    pub uptime: String,
+    pub mem: i64,
+    pub cores: i32,
+    pub gomaxprocs: i32,
+    pub cpu: f64,
+    pub connections: i64,
+    pub total_connections: i64,
+    pub routes: i64,
+    pub remotes: i64,
+    pub leafnodes: i64,
+    pub in_msgs: i64,
+    pub out_msgs: i64,
+    pub in_bytes: i64,
+    pub out_bytes: i64,
+    pub slow_consumers: i64,
+    pub subscriptions: i64,
+    pub http_req_stats: HttpReqStats,
+    pub config_load_time: String,
+    #[serde(default)]
+    pub system_account: Option<String>,
+    pub slow_consumer_stats: SlowConsumerStats,
+    #[serde(default)]
+    pub git_commit: Option<String>,
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug, Eq, PartialEq)]
-pub struct ServerCluster {
-    addr: String,
-    cluster_port: u16,
-    auth_timeout: u64,
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct ClusterInfo {
+    #[serde(default)]
+    pub addr: Option<String>,
+    #[serde(default)]
+    pub cluster_port: Option<u16>,
+    #[serde(default)]
+    pub auth_timeout: Option<i64>,
+    #[serde(default)]
+    pub tls_timeout: Option<i64>,
+    #[serde(default)]
+    pub tls_required: Option<bool>,
+    #[serde(default)]
+    pub tls_verify: Option<bool>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub urls: Option<Vec<String>>,
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug, Eq, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct MqttConfig {
+    pub host: String,
+    pub port: u16,
+    pub tls_timeout: i64,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct JetstreamConfig {
+    pub config: JetstreamServerConfig,
+    pub stats: JetstreamStats,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct JetstreamServerConfig {
+    pub max_memory: i64,
+    pub max_storage: i64,
+    pub store_dir: String,
+    pub sync_interval: i64,
+    pub compress_ok: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct JetstreamStats {
+    pub memory: i64,
+    pub storage: i64,
+    pub reserved_memory: i64,
+    pub reserved_storage: i64,
+    pub accounts: i64,
+    pub ha_assets: i64,
+    pub api: JetstreamApiStats,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct JetstreamApiStats {
+    pub total: i64,
+    pub errors: i64,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct HttpReqStats {
+    #[serde(rename = "/varz")]
+    pub varz: i64,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct SlowConsumerStats {
+    pub clients: i64,
+    pub routes: i64,
+    pub gateways: i64,
+    pub leafs: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NatsClient {
     pub id: Option<i64>,
     pub name: String,
@@ -173,11 +246,28 @@ pub struct NatsClient {
 }
 
 impl NatsClient {
-    pub fn get_subscriptions(&self) -> Vec<rants::Subject> {
-        let (mut tokens, mut subs) = (Vec::new(), Vec::new());
-        for s in self.subjects.iter() {
-            s.get_subscriptions(&mut tokens, &mut subs);
-        }
-        subs
+    pub fn get_subscriptions(&self) -> Vec<String> {
+        self.subjects
+            .iter()
+            .flat_map(|s| s.get_subscriptions())
+            .collect()
+    }
+}
+
+#[derive(Debug)]
+pub enum VarzError {
+    RequestError(reqwest::Error),
+    JsonError(serde_json::Error),
+}
+
+impl From<reqwest::Error> for VarzError {
+    fn from(err: reqwest::Error) -> Self {
+        VarzError::RequestError(err)
+    }
+}
+
+impl From<serde_json::Error> for VarzError {
+    fn from(err: serde_json::Error) -> Self {
+        VarzError::JsonError(err)
     }
 }

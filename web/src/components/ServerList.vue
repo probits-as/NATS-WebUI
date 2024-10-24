@@ -10,7 +10,8 @@
       </el-button>
     </el-header>
     <el-main style="padding: 0px 20px; overflow-y: auto;">
-      <el-table :data="servers" style="width: 100%; border-bottom: none;" :fit="true" @row-click="selectServer" height="100%">
+      <el-table :data="servers" style="width: 100%; border-bottom: none;" :fit="true" @row-click="selectServer"
+        height="100%">
         <!-- <el-table-column fixed prop="date" label="Date" width="150">
         </el-table-column> -->
         <div slot="empty">
@@ -37,8 +38,9 @@
         </el-table-column>
         <el-table-column label="Status" width="120">
           <template slot-scope="scope">
-            <span style="padding: 4px 8px 2px 8px; border-radius: 4px; vertical-align: middle; color: #f6f6f6;" :style="{background: servers[scope.$index].varz === null ? '#F56C6C' : '#67C23A'}">
-              {{servers[scope.$index].varz === null ? 'Unreachable' : 'Connected' }}
+            <span style="padding: 4px 8px 2px 8px; border-radius: 4px; vertical-align: middle; color: #f6f6f6;"
+              :style="{ background: servers[scope.$index].varz === null ? '#F56C6C' : '#67C23A' }">
+              {{ servers[scope.$index].varz === null ? 'Unreachable' : 'Connected' }}
             </span>
           </template>
         </el-table-column>
@@ -52,8 +54,9 @@
         </el-table-column>
       </el-table>
     </el-main>
-    
-    <el-dialog title="Configure New NATS Server" :visible.sync="createServerDialogVisible" width="30%" center>
+
+    <el-dialog :title="createServerForm.id ? 'Edit NATS Server' : 'Configure New NATS Server'"
+      :visible.sync="createServerDialogVisible" width="30%" center>
       <el-form ref="form" :model="createServerForm" label-width="120px">
         <el-form-item label="Server Name">
           <el-input v-model="createServerForm.name"></el-input>
@@ -66,6 +69,9 @@
         </el-form-item>
         <el-form-item label="Monitoring Port">
           <el-input-number :controls="false" v-model="createServerForm.monitoring_port"></el-input-number>
+        </el-form-item>
+        <el-form-item label="Auth Token">
+          <el-input v-model="createServerForm.token" type="password" show-password></el-input>
         </el-form-item>
       </el-form>
       <span slot="footer" class="dialog-footer">
@@ -90,8 +96,9 @@ export default {
         id: null,
         name: '',
         host: '',
-        port: 0,
-        monitoring_port: 0,
+        port: 4222,
+        monitoring_port: 8222,
+        token: '', // Add this line
         subjects: [],
         publications: []
       },
@@ -99,7 +106,7 @@ export default {
     }
   },
   computed: {
-    ...mapState ({
+    ...mapState({
       servers: s => s.app_state.servers,
       serversMap: s => s.transient.serversMap
     })
@@ -116,6 +123,7 @@ export default {
         host: '',
         port: 4222,
         monitoring_port: 8222,
+        token: '', // Add this line
         subjects: [],
         publications: []
       }
@@ -143,19 +151,34 @@ export default {
       return numeral(cellValue).format('0.00b')
     }
   },
-  mounted () {
+  mounted() {
+    console.log("Mounting ServerList component");
     let protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    this.socket = new ReconnectingWebSocket(protocol + '//' + window.location.host + '/api/state/ws')
-    this.socket.addEventListener('message', function (ev) {
-      let msg = JSON.parse(ev.data)
-      this.serversMap[msg.server_id].varz = msg.varz
+    let wsUrl = protocol + '//' + window.location.host + '/api/state/ws';
+    console.log("Connecting to WebSocket:", wsUrl);
+    this.socket = new ReconnectingWebSocket(wsUrl);
+    this.socket.addEventListener('open', () => {
+      console.log("WebSocket connection opened");
+    });
+    this.socket.addEventListener('message', (ev) => {
+      console.log("Received WebSocket message:", ev.data);
+      let msg = JSON.parse(ev.data);
+      console.log("Parsed message:", msg);
+      this.serversMap[msg.server_id].varz = msg.varz;
       if (this.serversMap[msg.server_id].timeoutId !== undefined) {
-        window.clearTimeout(this.serversMap[msg.server_id].timeoutId)
+        window.clearTimeout(this.serversMap[msg.server_id].timeoutId);
       }
-      this.serversMap[msg.server_id].timeoutId = window.setTimeout(function() {
-        this.serversMap[msg.server_id].varz = null
-      }, 5000)
-    }.bind(this))
+      this.serversMap[msg.server_id].timeoutId = window.setTimeout(() => {
+        console.log("Clearing varz for server ID:", msg.server_id);
+        this.serversMap[msg.server_id].varz = null;
+      }, 5000);
+    });
+    this.socket.addEventListener('close', () => {
+      console.log("WebSocket connection closed");
+    });
+    this.socket.addEventListener('error', (error) => {
+      console.error("WebSocket error:", error);
+    });
   }
 }
 </script>

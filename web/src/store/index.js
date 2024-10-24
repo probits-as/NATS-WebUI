@@ -84,32 +84,10 @@ export default new Vuex.Store({
     },
     async fetchServerSubjects(ctx, serverId) {
       const response = await axios.get(`/api/state/server/${serverId}/subjects`);
-      const newSubjects = response.data;
-      const currentSubjects = ctx.state.transient.serversMap[serverId].subjects || [];
+      const subjects = response.data;
 
-      // Merge new subjects with existing user-added subjects
-      const mergedSubjects = mergeSubjects(currentSubjects, newSubjects);
-
-      ctx.commit('updateServerSubjects', { serverId, subjects: mergedSubjects });
-      return mergedSubjects;
+      ctx.commit('updateServerSubjects', { serverId, subjects: subjects });
+      return subjects;
     },
   }
 })
-
-function mergeSubjects(currentSubjects, newSubjects) {
-  const mergedSubjects = [...currentSubjects];
-
-  newSubjects.forEach(newSubject => {
-    const existingIndex = mergedSubjects.findIndex(s => s.id === newSubject.id);
-    if (existingIndex === -1) {
-      mergedSubjects.push(newSubject);
-    } else if (mergedSubjects[existingIndex].source !== 'User') {
-      mergedSubjects[existingIndex] = newSubject;
-    }
-  });
-
-  // Remove server-populated subjects that no longer exist
-  return mergedSubjects.filter(subject =>
-    subject.source === 'User' || newSubjects.some(s => s.id === subject.id)
-  );
-}

@@ -558,13 +558,9 @@ export default {
     },
     async refreshSubjects() {
       try {
-        this.$set(this.server, 'subjectsLoading', true);
-        const response = await this.$axios.get(`/api/servers/${this.server.id}/subjects`);
-        this.$set(this.server, 'subjects', response.data);
+        this.$store.dispatch('fetchServerSubjects', this.server.id);
       } catch (error) {
         console.error('Failed to refresh subjects:', error);
-      } finally {
-        this.$set(this.server, 'subjectsLoading', false);
       }
     },
     loadNode(node, resolve) {
@@ -652,6 +648,7 @@ span.metric-value-smaller {
   white-space: nowrap;
 }
 </style>
+
 
 
 

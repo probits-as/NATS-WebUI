@@ -514,7 +514,8 @@ fn build_subject_hierarchy(subsz: SubszResponse) -> Vec<SubjectTreeNode> {
         selected: false,
     };
 
-    for subscription in subsz.subscriptions_list {
+    for (index, subscription) in subsz.subscriptions_list.iter().enumerate() {
+        debug!("Processing subscription {}: {:?}", index, subscription);
         let tokens: Vec<&str> = subscription.subject.split('.').collect();
         let mut current = &mut root;
 
@@ -530,6 +531,7 @@ fn build_subject_hierarchy(subsz: SubszResponse) -> Vec<SubjectTreeNode> {
             if let Some(index) = node_index {
                 current = &mut current.subjects[index];
             } else {
+                debug!("Adding new node: {}", subject_str);
                 let new_node = SubjectTreeNode {
                     id,
                     subject_str,
@@ -553,15 +555,24 @@ async fn get_server_subjects(
     server_id: i64,
     conn: Connection,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    let server = sql::get_server(&conn, server_id)
-        .map_err(|e| warp::reject::custom(ServerError::from(e)))?;
+    debug!("Fetching subjects for server ID: {}", server_id);
+    let server = sql::get_server(&conn, server_id).map_err(|e| {
+        error!("Failed to get server from database: {:?}", e);
+        warp::reject::custom(ServerError::from(e))
+    })?;
+    debug!("Retrieved server: {:?}", server);
     let client = reqwest::Client::new();
-    let subsz = get_server_subsz(server.host, server.monitoring_port, &client)
+    let subsz = get_server_subsz(server.host.clone(), server.monitoring_port, &client)
         .await
-        .map_err(|e| warp::reject::custom(ServerError::from(e)))?;
+        .map_err(|e| {
+            error!("Failed to get subsz from NATS server: {:?}", e);
+            warp::reject::custom(ServerError::from(e))
+        })?;
+    debug!("Retrieved subsz: {:?}", subsz);
     let hierarchy = build_subject_hierarchy(subsz);
     debug!(
-        "Returning subject hierarchy with {} top-level subjects",
+        "Built subject hierarchy for server {} with {} top-level subjects",
+        server_id,
         hierarchy.len()
     );
     Ok(warp::reply::json(&hierarchy))

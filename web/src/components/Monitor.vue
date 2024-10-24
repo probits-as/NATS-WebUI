@@ -504,6 +504,9 @@ export default {
     },
     "subjectHierarchyDialogVisible": function () {
       this.clearTimeSeriesHistory()
+    },
+    'server.id': function() {
+      this.fetchSubjects();
     }
   },
   methods: {
@@ -585,9 +588,8 @@ export default {
     async fetchSubjects() {
       try {
         console.log("Fetching subjects for server:", this.server.id);
-        const subjects = await this.$store.dispatch('fetchServerSubjects', this.server.id);
-        console.log("Received subjects:", subjects);
-        this.server.subjects = subjects;
+        await this.$store.dispatch('fetchServerSubjects', this.server.id);
+        console.log("Subjects updated in store");
       } catch (error) {
         console.error('Failed to fetch subjects:', error);
       }
@@ -666,6 +668,10 @@ span.metric-value-smaller {
   white-space: nowrap;
 }
 </style>
+
+
+
+
 
 
 

@@ -45,6 +45,12 @@ export default new Vuex.Store({
       } else {
         state.transient.selectedClient = index
       }
+    },
+    updateServerSubjects(state, { serverId, subjects }) {
+      const server = state.transient.serversMap[serverId];
+      if (server) {
+        Vue.set(server, 'subjects', subjects);
+      }
     }
   },
   actions: {
@@ -78,6 +84,7 @@ export default new Vuex.Store({
     },
     async fetchServerSubjects(ctx, serverId) {
       const response = await axios.get(`/api/state/server/${serverId}/subjects`);
+      ctx.commit('updateServerSubjects', { serverId, subjects: response.data });
       return response.data;
     },
   }

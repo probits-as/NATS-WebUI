@@ -1,49 +1,86 @@
+use async_nats::{Client, ConnectOptions};
 use chrono::Utc;
-use futures::stream::{select_all, FuturesUnordered};
+use futures::stream::FuturesUnordered;
 use futures_util::{sink::SinkExt, stream::StreamExt};
-use log::Level;
-use log::{error, info};
+use log::LevelFilter;
+use log::{debug, error, info};
 use rusqlite::Connection;
 use serde::Serialize;
+use simple_logger::SimpleLogger;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, Mutex};
-use tokio::time;
 use warp::filters::ws::WebSocket;
 use warp::reject::Reject;
 use warp::ws::Message;
-use warp::{Filter, Rejection};
+use warp::Filter;
 
 pub mod datatypes;
 mod sql;
 use datatypes::*;
-use rants::Address;
 
 #[derive(Debug, Clone)]
 struct ServerError<E: 'static + std::error::Error + Sync + Send + Debug> {
+    #[allow(dead_code)]
     error: E,
 }
 
 impl<E: 'static + std::error::Error + Sync + Send + Debug> Reject for ServerError<E> {}
+
 impl<E: 'static + std::error::Error + Sync + Send + Debug> From<E> for ServerError<E> {
     fn from(error: E) -> Self {
         ServerError { error }
     }
 }
-impl<E: 'static + std::error::Error + Sync + Send + Debug> Into<warp::reject::Rejection>
-    for ServerError<E>
-{
-    fn into(self) -> Rejection {
-        warp::reject::custom(self)
+
+async fn connect_to_nats(
+    url: &str,
+    token: Option<String>,
+) -> Result<Client, Box<dyn std::error::Error>> {
+    debug!("Attempting to connect to NATS server at {}", url);
+    let mut options = ConnectOptions::new();
+
+    if let Some(auth_token) = token {
+        debug!("Using authentication token for NATS connection");
+        options = options.token(auth_token);
+    } else {
+        debug!("No authentication token provided for NATS connection");
+    }
+
+    match options.connect(url).await {
+        Ok(client) => {
+            info!("Successfully connected to NATS server at {}", url);
+            Ok(client)
+        }
+        Err(e) => {
+            error!("Failed to connect to NATS server at {}: {:?}", url, e);
+            Err(e.into())
+        }
     }
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 10)]
 async fn main() -> rusqlite::Result<()> {
-    // Setup the loggers
-    simple_logger::init_with_level(Level::Info).unwrap();
-    let log = warp::log("web");
+    // Set this to false to disable debug logging
+    let enable_debug = true;
+
+    // Setup the logger with UTC timestamps
+    SimpleLogger::new()
+        .with_level(if enable_debug {
+            LevelFilter::Debug
+        } else {
+            LevelFilter::Info
+        })
+        .with_utc_timestamps()
+        .init()
+        .unwrap();
+
+    if enable_debug {
+        info!("Logger initialized at Debug level");
+    } else {
+        info!("Logger initialized at Info level");
+    }
 
     // Setup the database
     let db_conn = sql::get_db_conn()?;
@@ -52,26 +89,36 @@ async fn main() -> rusqlite::Result<()> {
 
     // Setup global app state for sharing between threads
     let state = Arc::new(Mutex::new(App::default()));
+    debug!("Global app state initialized");
     let state_clone = Arc::clone(&state);
     let state_filter = warp::any().map(move || Arc::clone(&state_clone));
+
+    let builder = reqwest::ClientBuilder::new().connect_timeout(Duration::new(0, 250_000_000));
+    let client = builder.build().expect("Failed to build reqwest client");
 
     // Setup a concurrent running thread that calls monitoring endpoints
     // on configured NATS servers every second.
     let (tx, _) = broadcast::channel::<VarzBroadcastMessage>(16);
     let sender_clone = tx.clone();
-    let receiver_filter = warp::any().map(move || sender_clone.subscribe());
-    let state_clone = Arc::clone(&state);
-    let sender_clone = tx.clone();
+    let receiver_filter = warp::any().map(move || tx.subscribe());
+
+    let state_for_spawn = Arc::clone(&state);
     tokio::spawn(async move {
-        let mut interval = time::interval(Duration::from_secs(1));
-        let s = state_clone;
+        debug!("Starting server monitoring thread");
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        let s = state_for_spawn;
         let tx = sender_clone;
+        let cl = client.clone();
         loop {
             interval.tick().await;
             let state = Arc::clone(&s);
             let sender = tx.clone();
+            let client = cl.clone();
             tokio::spawn(async move {
-                get_server_varz(state, sender).await;
+                debug!("Fetching server varz");
+                if let Err(e) = get_server_varz(state, sender, client).await {
+                    error!("Error fetching server varz: {:?}", e);
+                }
             });
         }
     });
@@ -157,8 +204,9 @@ async fn main() -> rusqlite::Result<()> {
     let route = static_content_route
         .or(api_route)
         .or(client_subscribe_route)
-        .with(log);
+        .with(warp::log("web"));
 
+    debug!("Starting server on 0.0.0.0:80");
     warp::serve(route).run(([0, 0, 0, 0], 80)).await;
 
     Ok(())
@@ -168,14 +216,16 @@ async fn get_state(
     conn: Connection,
     state: Arc<Mutex<App>>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    let svs = match sql::get_servers(&conn) {
-        Ok(v) => v,
-        Err(e) => return Err(ServerError::from(e).into()),
-    };
-    let cls = match sql::get_clients(&conn) {
-        Ok(v) => v,
-        Err(e) => return Err(ServerError::from(e).into()),
-    };
+    debug!("Fetching application state");
+    let (svs, cls) = tokio::task::spawn_blocking(move || {
+        let svs = sql::get_servers(&conn).map_err(ServerError::from)?;
+        let cls = sql::get_clients(&conn).map_err(ServerError::from)?;
+        Ok::<_, ServerError<rusqlite::Error>>((svs, cls))
+    })
+    .await
+    .map_err(|e| warp::reject::custom(ServerError::from(e)))?
+    .map_err(warp::reject::custom)?;
+
     let mut st = state.lock().await;
     st.set_servers(svs);
     st.set_clients(cls);
@@ -184,54 +234,69 @@ async fn get_state(
 
 async fn broadcast_transient_info(
     mut ws: WebSocket,
-    rx: broadcast::Receiver<VarzBroadcastMessage>,
+    mut rx: broadcast::Receiver<VarzBroadcastMessage>,
 ) {
-    match ws
-        .send_all(
-            &mut rx.map(|msg| Ok(Message::text(serde_json::to_string(&msg.unwrap()).unwrap()))),
-        )
-        .await
-    {
-        Ok(_) => (),
-        Err(e) => error!("Error in broadcasting app state: {:?}", e),
-    }
-}
-
-async fn get_server_varz(state: Arc<Mutex<App>>, tx: broadcast::Sender<VarzBroadcastMessage>) {
-    let builder = reqwest::ClientBuilder::new().connect_timeout(Duration::new(0, 250_000_000));
-    let cl = builder.build().unwrap();
-    let mut stream = state
-        .lock()
-        .await
-        .servers
-        .iter()
-        .map(|s| NatsServer::get_varz(s.id.unwrap(), s.host.clone(), s.monitoring_port, &cl))
-        .collect::<FuturesUnordered<_>>();
-    while let Some(Ok(v)) = stream.next().await {
-        match tx.send(v) {
-            Ok(_) => (),
-            Err(e) => error!(
-                "Failed to send app state message over broadcast channel. Error: {:?}",
-                e
-            ),
+    debug!("Starting transient info broadcast");
+    while let Ok(msg) = rx.recv().await {
+        debug!("Received varz update for server ID: {}", msg.server_id);
+        match serde_json::to_string(&msg) {
+            Ok(json) => {
+                debug!("Serialized varz update: {}", json);
+                if let Err(e) = ws.send(Message::text(json)).await {
+                    error!("Error sending WebSocket message: {:?}", e);
+                    break;
+                }
+            }
+            Err(e) => error!("Error serializing varz update: {:?}", e),
         }
     }
+    debug!("Transient info broadcast ended");
+}
+
+async fn get_server_varz(
+    state: Arc<Mutex<App>>,
+    tx: broadcast::Sender<VarzBroadcastMessage>,
+    client: reqwest::Client,
+) -> Result<(), Box<dyn std::error::Error>> {
+    debug!("Fetching server varz");
+    let servers = state.lock().await.servers.clone();
+    debug!("Number of servers to fetch varz: {}", servers.len());
+    let mut stream = servers
+        .iter()
+        .map(|s| {
+            debug!("Fetching varz for server ID: {}", s.id.unwrap());
+            NatsServer::get_varz(s.id.unwrap(), s.host.clone(), s.monitoring_port, &client)
+        })
+        .collect::<FuturesUnordered<_>>();
+    while let Some(result) = stream.next().await {
+        match result {
+            Ok(v) => {
+                debug!("Received varz update for server ID: {}", v.server_id);
+                if let Err(e) = tx.send(v) {
+                    error!("Failed to send app state message: {:?}", e);
+                }
+            }
+            Err(e) => error!("Failed to fetch varz: {:?}", e),
+        }
+    }
+    debug!("Finished fetching server varz");
+    Ok(())
 }
 
 async fn handle_insert_client(
     conn: Connection,
     client: NatsClient,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    match sql::insert_client(&conn, client) {
-        Ok(_) => Ok(warp::reply()),
-        Err(e) => Err(ServerError::from(e).into()),
-    }
+    debug!("Inserting new client: {:?}", client);
+    sql::insert_client(&conn, client).map_err(|e| warp::reject::custom(ServerError::from(e)))?;
+    Ok(warp::reply())
 }
 
 async fn handle_update_client(
     conn: Connection,
     client: NatsClient,
 ) -> Result<impl warp::Reply, warp::Rejection> {
+    debug!("Updating client: {:?}", client);
     match sql::update_client(&conn, client) {
         Ok(_) => Ok(warp::reply()),
         Err(e) => Err(ServerError::from(e).into()),
@@ -242,6 +307,7 @@ async fn handle_delete_client(
     client_id: i64,
     conn: Connection,
 ) -> Result<impl warp::Reply, warp::Rejection> {
+    debug!("Deleting client with ID: {}", client_id);
     match sql::delete_client(&conn, client_id) {
         Ok(_) => Ok(warp::reply()),
         Err(e) => Err(ServerError::from(e).into()),
@@ -287,6 +353,7 @@ struct SocketMessage {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[allow(dead_code)]
 enum SocketMessageType {
     Msg,
     Info,
@@ -297,6 +364,7 @@ enum SocketMessageType {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[allow(dead_code)]
 struct SubscriptionMessage {
     payload: String,
     subject: String,
@@ -307,15 +375,16 @@ async fn handle_client_subscribe_request(
     ws: warp::ws::Ws,
     conn: Connection,
 ) -> Result<impl warp::Reply, warp::Rejection> {
+    debug!("Handling subscription request for client ID: {}", client_id);
     match sql::get_connection_triple(&conn, client_id) {
-        Ok((hostname, port, mut subjects)) => {
+        Ok((hostname, port, subjects, token)) => {
             let addr = format!("{}:{}", hostname, port).parse().unwrap();
             Ok(ws.on_upgrade(|ws| async move {
-                let mut sbjs = Vec::new();
-                while let Some(s) = subjects.pop() {
-                    sbjs.append(&mut s.into())
-                }
-                handle_client_subscription(ws, addr, sbjs).await
+                let sbjs = subjects
+                    .into_iter()
+                    .flat_map(|node| node.flatten())
+                    .collect::<Vec<String>>();
+                handle_client_subscription(ws, addr, sbjs, token).await
             }))
         }
         Err(e) => Err(ServerError::from(e).into()),
@@ -324,95 +393,60 @@ async fn handle_client_subscribe_request(
 
 async fn handle_client_subscription(
     mut ws: WebSocket,
-    dest: Address,
-    subjects: Vec<rants::Subject>,
+    dest: String,
+    subjects: Vec<String>,
+    token: Option<String>,
 ) {
-    let client = rants::Client::new(vec![dest.clone()]);
+    debug!(
+        "Starting client subscription to {} for subjects: {:?}",
+        dest, subjects
+    );
+    let client = match connect_to_nats(&dest, token).await {
+        Ok(c) => {
+            info!("Successfully connected to NATS server for subscription");
+            c
+        }
+        Err(e) => {
+            error!("Failed to connect to NATS server: {:?}", e);
+            return;
+        }
+    };
 
-    client.connect_mut().await.echo(true);
-    client.connect().await;
-
-    let mut receivers = Vec::new();
-    for sbj in subjects.iter() {
-        let (_, recv) = client.subscribe(&sbj, 1_048_576).await.unwrap();
-        receivers.push(recv);
+    let mut subscriptions = Vec::new();
+    for subject in subjects {
+        match client.subscribe(subject.clone()).await {
+            Ok(sub) => {
+                debug!("Successfully subscribed to subject: {}", subject);
+                subscriptions.push(sub);
+            }
+            Err(e) => {
+                error!("Failed to subscribe to subject {}: {:?}", subject, e);
+                continue;
+            }
+        }
     }
 
-    let recv = select_all(receivers);
+    let mut stream = futures::stream::select_all(subscriptions);
 
-    let info_stream = client
-        .info_stream()
-        .await
-        .map(|info| SocketMessage {
-            typ: SocketMessageType::Info,
-            timestamp: Utc::now().timestamp_millis(),
-            subject: None,
-            message: format!("{:?}", info),
-        })
-        .boxed();
-    let ping_stream = client
-        .ping_stream()
-        .await
-        .map(|_| SocketMessage {
-            typ: SocketMessageType::Ping,
-            timestamp: Utc::now().timestamp_millis(),
-            subject: None,
-            message: "PING".to_string(),
-        })
-        .boxed();
-    let pong_stream = client
-        .pong_stream()
-        .await
-        .map(|_| SocketMessage {
-            typ: SocketMessageType::Pong,
-            timestamp: Utc::now().timestamp_millis(),
-            subject: None,
-            message: "PONG".to_string(),
-        })
-        .boxed();
-    let ok_stream = client
-        .ok_stream()
-        .await
-        .map(|_| SocketMessage {
-            typ: SocketMessageType::Ok,
-            timestamp: Utc::now().timestamp_millis(),
-            subject: None,
-            message: "OK".to_string(),
-        })
-        .boxed();
-    let err_stream = client
-        .err_stream()
-        .await
-        .map(|e| SocketMessage {
-            typ: SocketMessageType::Err,
-            timestamp: Utc::now().timestamp_millis(),
-            subject: None,
-            message: format!("{:?}", e),
-        })
-        .boxed();
-    let msg_stream = recv
-        .map(|msg| SocketMessage {
+    while let Some(msg) = stream.next().await {
+        debug!("Received message on subject: {}", msg.subject);
+        let socket_message = SocketMessage {
             typ: SocketMessageType::Msg,
             timestamp: Utc::now().timestamp_millis(),
-            subject: Some(format!("{}", msg.subject()).to_string()),
-            message: std::str::from_utf8(msg.payload()).unwrap().to_string(),
-        })
-        .boxed();
+            subject: Some(msg.subject.to_string()),
+            message: String::from_utf8_lossy(&msg.payload).to_string(),
+        };
 
-    let stream = select_all(vec![
-        info_stream,
-        ping_stream,
-        pong_stream,
-        ok_stream,
-        err_stream,
-        msg_stream,
-    ]);
-
-    match ws
-        .send_all(&mut stream.map(|msg| Ok(Message::text(serde_json::to_string(&msg).unwrap()))))
-        .await
-    {
-        Ok(_) => info!("Subscription to {:?} has ended.", dest),
-        Err(e) => error!("Error in subscription: {:?}.", e),
+        if let Err(e) = ws
+            .send(Message::text(
+                serde_json::to_string(&socket_message).unwrap(),
+            ))
+            .await
+        {
+            error!("WebSocket send error: {:?}", e);
+            break;
+        }
     }
+
+    info!("Subscription to {} has ended.", dest);
 }

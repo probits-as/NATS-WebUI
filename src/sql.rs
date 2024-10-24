@@ -19,6 +19,7 @@ pub fn db_setup(conn: &Connection) -> Result<()> {
                 host	TEXT NOT NULL,
                 port	INTEGER NOT NULL,
                 monitoring_port	INTEGER NOT NULL,
+                token   TEXT,
                 subjects	TEXT NOT NULL,
                 publications	TEXT NOT NULL
             )",
@@ -59,14 +60,15 @@ pub fn get_servers(conn: &Connection) -> Result<Vec<NatsServer>> {
     let mut ps = conn.prepare("SELECT * FROM servers")?;
     let rs = ps
         .query_map(params![], |row| {
-            let sbjs: String = row.get(5)?;
-            let pubs: String = row.get(6)?;
+            let sbjs: String = row.get(6)?;
+            let pubs: String = row.get(7)?;
             Ok(NatsServer {
                 id: Some(row.get(0)?),
                 name: row.get(1)?,
                 host: row.get(2)?,
                 port: row.get(3)?,
                 monitoring_port: row.get(4)?,
+                token: row.get(5)?,
                 varz: None,
                 subjects: serde_json::from_str::<Vec<SubjectTreeNode>>(&sbjs)
                     .expect("Failed to parse subject from SQL query as Vec<SubjectTreeNode>"),
@@ -133,12 +135,13 @@ pub fn insert_client(conn: &Connection, client: NatsClient) -> Result<usize> {
 
 pub fn insert_server(conn: &Connection, server: NatsServer) -> Result<usize> {
     Ok(conn.execute(
-        "INSERT INTO servers (name, host, port, monitoring_port, subjects, publications) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO servers (name, host, port, monitoring_port, token, subjects, publications) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             server.name,
             server.host,
             server.port,
             server.monitoring_port,
+            server.token,
             serde_json::to_string(&server.subjects).expect("Failed to serialize server subjects as JSON"),
             serde_json::to_string(&server.publications).expect("Failed to serialize server publications as JSON")
         ]
@@ -189,13 +192,15 @@ pub fn update_server(conn: &Connection, server: NatsServer) -> Result<usize> {
         host = ?2,\
         port = ?3,\
         monitoring_port = ?4,\
-        subjects = ?5,\
-        publications = ?6 WHERE id = ?7",
+        token = ?5,\
+        subjects = ?6,\
+        publications = ?7 WHERE id = ?8",
         params![
             server.name,
             server.host,
             server.port,
             server.monitoring_port,
+            server.token,
             serde_json::to_string(&server.subjects)
                 .expect("Failed to serialize server subjects as JSON"),
             serde_json::to_string(&server.publications)
@@ -218,8 +223,8 @@ pub fn delete_server(conn: &Connection, server_id: i64) -> Result<usize> {
 pub fn get_connection_triple(
     conn: &Connection,
     client_id: i64,
-) -> Result<(String, u16, Vec<SubjectTreeNode>)> {
-    let mut ps = conn.prepare("SELECT servers.host, servers.port, clients.subjects FROM clients INNER JOIN servers ON clients.server_id=servers.id WHERE clients.id = ?1")?;
+) -> Result<(String, u16, Vec<SubjectTreeNode>, Option<String>)> {
+    let mut ps = conn.prepare("SELECT servers.host, servers.port, clients.subjects, servers.token FROM clients INNER JOIN servers ON clients.server_id=servers.id WHERE clients.id = ?1")?;
     let rs = ps
         .query_map(params![client_id], |row| {
             let sbjs: String = row.get(2)?;
@@ -228,6 +233,7 @@ pub fn get_connection_triple(
                 row.get::<usize, u16>(1)?,
                 serde_json::from_str::<Vec<SubjectTreeNode>>(&sbjs)
                     .expect("Failed to parse subject from SQL query as Vec<SubjectTreeNode>"),
+                row.get::<usize, Option<String>>(3)?,
             ))
         })?
         .into_iter()
@@ -251,10 +257,22 @@ mod test {
     #[test]
     fn test_db_setup_and_teardown() {
         let conn = get_db_conn().unwrap();
-        db_setup(&conn);
+
+        // Handle db_setup result
+        match db_setup(&conn) {
+            Ok(_) => {}
+            Err(e) => panic!("Failed to set up database: {}", e),
+        }
+
         get_clients(&conn).expect("Could not get clients");
         get_servers(&conn).expect("Could not get servers");
-        db_teardown(&conn);
+
+        // Handle db_teardown result
+        match db_teardown(&conn) {
+            Ok(_) => {}
+            Err(e) => panic!("Failed to tear down database: {}", e),
+        }
+
         get_clients(&conn).expect_err("Could not drop clients table.");
         get_servers(&conn).expect_err("Could not drop servers table.");
     }
@@ -266,6 +284,7 @@ mod test {
             host: String::from("test_host.com"),
             port: 4222,
             monitoring_port: 8222,
+            token: None,
             varz: None,
             subjects: vec![],
             publications: vec![],
@@ -275,12 +294,12 @@ mod test {
     #[test]
     fn test_servers_crud() {
         let conn = get_db_conn().unwrap();
-        db_teardown(&conn);
-        db_setup(&conn);
+        db_teardown(&conn).expect("Failed to tear down database");
+        db_setup(&conn).expect("Failed to set up database");
 
         // Insert a server and check if it can be read
         let test_server = create_test_server();
-        insert_server(&conn, test_server);
+        insert_server(&conn, test_server).expect("Failed to insert server");
         let servers = get_servers(&conn).unwrap();
         let mut test_server = create_test_server();
         test_server.id = Some(1);
@@ -290,7 +309,7 @@ mod test {
         let mut test_server = create_test_server();
         test_server.id = Some(1);
         test_server.name = String::from("Updated_name");
-        update_server(&conn, test_server.clone());
+        update_server(&conn, test_server.clone()).expect("Failed to update server");
         let servers = get_servers(&conn).unwrap();
         assert_eq!(servers, vec![test_server]);
 
@@ -298,7 +317,7 @@ mod test {
         assert_eq!(delete_server(&conn, 1), Ok(1));
         assert_eq!(get_servers(&conn).unwrap().iter().count(), 0);
 
-        db_teardown(&conn);
+        db_teardown(&conn).expect("Failed to tear down database");
     }
 
     fn create_test_client() -> NatsClient {
@@ -323,12 +342,12 @@ mod test {
     #[test]
     fn test_clients_crud() {
         let conn = get_db_conn().unwrap();
-        db_teardown(&conn);
-        db_setup(&conn);
+        db_teardown(&conn).expect("Failed to tear down database");
+        db_setup(&conn).expect("Failed to set up database");
 
         // Insert a client and check if it can be read
         let test_client = create_test_client();
-        insert_client(&conn, test_client);
+        insert_client(&conn, test_client).expect("Failed to insert client");
         let clients = get_clients(&conn).unwrap();
         let mut test_client = create_test_client();
         test_client.id = Some(1);
@@ -338,7 +357,7 @@ mod test {
         let mut test_client = create_test_client();
         test_client.id = Some(1);
         test_client.name = String::from("Updated_name");
-        update_client(&conn, test_client.clone());
+        update_client(&conn, test_client.clone()).expect("Failed to update client");
         let clients = get_clients(&conn).unwrap();
         assert_eq!(clients, vec![test_client]);
 
@@ -346,6 +365,6 @@ mod test {
         assert_eq!(delete_client(&conn, 1), Ok(1));
         assert_eq!(get_clients(&conn).unwrap().iter().count(), 0);
 
-        db_teardown(&conn);
+        db_teardown(&conn).expect("Failed to tear down database");
     }
 }

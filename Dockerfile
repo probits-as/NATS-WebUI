@@ -1,4 +1,4 @@
-FROM rust:1.44-alpine as backend-builder
+FROM rust:1.82-alpine as backend-builder
 WORKDIR /usr/src/NATS-WebUI
 COPY . .
 RUN apk update && apk upgrade 

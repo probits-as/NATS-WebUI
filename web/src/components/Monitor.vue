@@ -297,7 +297,6 @@
 
 <script>
 import { mapState, mapActions, mapMutations } from 'vuex'
-import tabdown from 'tabdown-sacha'
 import {Ace as AceEditor} from 'vue2-brace-editor'
 import VueApexCharts from 'vue-apexcharts'
 
@@ -547,9 +546,9 @@ export default {
       }
     },
     startRefreshingSubjects() {
-      this.refreshSubjects();
+      this.refreshSubjects(); // Changed from this.fetchSubjects()
       this.refreshInterval = setInterval(() => {
-        this.refreshSubjects();
+        this.refreshSubjects(); // Changed from this.fetchSubjects()
       }, 30000); // Refresh every 30 seconds
     },
     stopRefreshingSubjects() {
@@ -567,9 +566,6 @@ export default {
       } finally {
         this.$set(this.server, 'subjectsLoading', false);
       }
-    },
-    refreshSubjects() {
-      this.fetchSubjects();
     },
     loadNode(node, resolve) {
       if (node.level === 0) {
@@ -656,6 +652,11 @@ span.metric-value-smaller {
   white-space: nowrap;
 }
 </style>
+
+
+
+
+
 
 
 

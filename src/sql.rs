@@ -265,6 +265,25 @@ pub fn get_server(conn: &Connection, server_id: i64) -> Result<NatsServer> {
     Ok(server)
 }
 
+pub fn update_server_subjects(
+    conn: &Connection,
+    server_id: i64,
+    subjects: &[SubjectTreeNode],
+) -> Result<()> {
+    let subjects_json = serde_json::to_string(subjects).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(
+            0,
+            rusqlite::types::Type::Text,
+            Box::new(e),
+        )
+    })?;
+    conn.execute(
+        "UPDATE servers SET subjects = ?1 WHERE id = ?2",
+        params![subjects_json, server_id],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod test {
     // NOTE: These tests should not be run in parallel

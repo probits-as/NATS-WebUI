@@ -34,10 +34,14 @@
           <!-- </el-menu-item-group> -->
         </el-menu>
       </el-aside>
-      <ServerList v-show="server===true && index === -1" @selectServer="handleSelectServer"/>
-      <ClientList v-show="server===false && index === -1"/>
-      <Client v-show="server===false && index >= 0"/>
-      <Monitor v-show="server===true && index >= 0"/>
+
+      <!-- Main content area -->
+      <el-main style="padding: 0; overflow-y: auto;">
+        <ServerList v-if="isServerList" @selectServer="handleSelectServer"/>
+        <ClientList v-else-if="isClientList"/>
+        <Client v-else-if="isClientView"/>
+        <Monitor v-else-if="isMonitorView"/>
+      </el-main>
     </el-container>
     
     <el-footer style="border-top: solid 1px #e6e6e6; height: 24px; text-align: right; vertical-align: middle; font-size: x-small; line-height: 24px;">
@@ -68,8 +72,8 @@ export default {
   },
   methods: {
     ...mapMutations(['selectScreen']),
-    handleSelectServer(i) {
-      this.selectScreen({isServer: true, index: i})
+    handleSelectServer(id) {
+      this.selectScreen({ isServer: true, index: id })
     },
     handleSelect(server, i) {
       this.selectScreen({isServer: server, index: i})
@@ -79,13 +83,24 @@ export default {
     this.$refs.menu.open('1')
   }, 
   computed: {
-    ...mapState ({
+    ...mapState({
       servers: s => s.app_state.servers,
       clients: s => s.app_state.clients,
       server: s => s.transient.server,
-      index: s => s.transient.index,
-      screen: s => [s.transient.server, s.transient.index]
-    })
+      index: s => s.transient.index
+    }),
+    isServerList() {
+      return this.server === true && this.index === -1;
+    },
+    isClientList() {
+      return this.server === false && this.index === -1;
+    },
+    isClientView() {
+      return this.server === false && this.index >= 0;
+    },
+    isMonitorView() {
+      return this.server === true && this.index >= 0;
+    }
   }
 }
 </script>

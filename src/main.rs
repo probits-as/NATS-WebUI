@@ -511,7 +511,6 @@ fn build_subject_hierarchy(
         subject_str: "".to_string(),
         subjects: vec![],
         selected: false,
-        source: SubjectSource::Server,
     };
 
     // First, add all existing subjects (both user-added and server-populated)
@@ -540,7 +539,6 @@ fn build_subject_hierarchy(
                     subject_str,
                     subjects: vec![],
                     selected: false,
-                    source: SubjectSource::Server,
                 };
                 current.subjects.push(new_node);
                 current = current.subjects.last_mut().unwrap();
@@ -569,7 +567,6 @@ fn add_subject_to_hierarchy(root: &mut SubjectTreeNode, subject: SubjectTreeNode
                 subject_str,
                 subjects: vec![],
                 selected: false,
-                source: subject.source.clone(),
             });
             current = current.subjects.last_mut().unwrap();
         }

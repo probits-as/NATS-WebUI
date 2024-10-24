@@ -265,16 +265,19 @@ pub fn get_server(conn: &Connection, server_id: i64) -> Result<NatsServer> {
     Ok(server)
 }
 
-pub fn get_subjects(conn: &Connection, server_id: i64) -> Result<Vec<SubjectTreeNode>> {
-    let mut stmt = conn.prepare("SELECT subjects FROM servers WHERE id = ?")?;
-    let subjects: String = stmt.query_row([server_id], |row| row.get(0))?;
-
-    // Deserialize the JSON string into a Vec<SubjectTreeNode>
-    let subjects: Vec<SubjectTreeNode> = serde_json::from_str(&subjects).map_err(|e| {
+pub fn update_server_subjects(
+    conn: &Connection,
+    server_id: i64,
+    subjects: &[SubjectTreeNode],
+) -> Result<()> {
+    let subjects_json = serde_json::to_string(subjects).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
     })?;
-
-    Ok(subjects)
+    conn.execute(
+        "UPDATE servers SET subjects = ?1 WHERE id = ?2",
+        params![subjects_json, server_id],
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]

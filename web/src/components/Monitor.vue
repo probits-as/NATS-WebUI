@@ -263,8 +263,11 @@
           <h1 style="margin: 8px 0px;">Server Subject Hierarchy</h1>
           <el-button @click="editSubjectHierarchy" icon="el-icon-edit">Edit</el-button>
         </div>
-        <el-tree :data="server.subjects" empty-text="No subjects configured for this server." default-expand-all
-          :props="{label: 'subject_str', children: 'subjects', disabled: false, isLeaf: checkIsLeaf}">
+        <el-tree
+          :data="server.subjects"
+          :props="{ label: 'subject_str', children: 'subjects' }"
+          @node-click="handleNodeClick"
+        >
         </el-tree>
         <!-- <h1>Publications</h1>
         <el-tree
@@ -434,6 +437,7 @@ export default {
           data: []
         }
       ],
+      refreshInterval: null,
     }
   },
   watch: {
@@ -597,23 +601,32 @@ export default {
         console.error('Failed to fetch subjects:', error);
       }
     },
-    startPeriodicUpdates() {
-      this.updateInterval = setInterval(() => {
-        this.fetchSubjects();
-      }, 30000); // Update every 30 seconds
+    startRefreshingSubjects() {
+      this.refreshSubjects();
+      this.refreshInterval = setInterval(() => {
+        this.refreshSubjects();
+      }, 30000); // Refresh every 30 seconds
     },
-    stopPeriodicUpdates() {
-      if (this.updateInterval) {
-        clearInterval(this.updateInterval);
+    stopRefreshingSubjects() {
+      if (this.refreshInterval) {
+        clearInterval(this.refreshInterval);
+      }
+    },
+    async refreshSubjects() {
+      try {
+        const response = await this.$axios.get(`/api/servers/${this.server.id}/subjects`);
+        this.server.subjects = response.data;
+      } catch (error) {
+        console.error('Failed to refresh subjects:', error);
       }
     },
   },
   mounted() {
     this.fetchSubjects();
-    this.startPeriodicUpdates();
+    this.startRefreshingSubjects();
   },
   beforeDestroy() {
-    this.stopPeriodicUpdates();
+    this.stopRefreshingSubjects();
   },
 }
 </script>
@@ -685,7 +698,6 @@ span.metric-value-smaller {
   white-space: nowrap;
 }
 </style>
-
 
 
 

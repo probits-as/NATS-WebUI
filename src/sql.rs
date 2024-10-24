@@ -243,6 +243,28 @@ pub fn get_connection_triple(
     rs
 }
 
+pub fn get_server(conn: &Connection, server_id: i64) -> Result<NatsServer> {
+    let mut stmt = conn.prepare("SELECT * FROM servers WHERE id = ?1")?;
+    let server = stmt.query_row(params![server_id], |row| {
+        let sbjs: String = row.get(6)?;
+        let pubs: String = row.get(7)?;
+        Ok(NatsServer {
+            id: Some(row.get(0)?),
+            name: row.get(1)?,
+            host: row.get(2)?,
+            port: row.get(3)?,
+            monitoring_port: row.get(4)?,
+            token: row.get(5)?,
+            varz: None,
+            subjects: serde_json::from_str::<Vec<SubjectTreeNode>>(&sbjs)
+                .expect("Failed to parse subject from SQL query as Vec<SubjectTreeNode>"),
+            publications: serde_json::from_str::<Vec<Publication>>(&pubs)
+                .expect("Failed to parse publications from SQL query as Vec<Publication>"),
+        })
+    })?;
+    Ok(server)
+}
+
 #[cfg(test)]
 mod test {
     // NOTE: These tests should not be run in parallel

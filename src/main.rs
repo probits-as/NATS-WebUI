@@ -7,6 +7,7 @@ use log::{debug, error, info};
 use rusqlite::Connection;
 use serde::Serialize;
 use simple_logger::SimpleLogger;
+use std::fmt;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
@@ -57,6 +58,35 @@ async fn connect_to_nats(
             error!("Failed to connect to NATS server at {}: {:?}", url, e);
             Err(e.into())
         }
+    }
+}
+
+#[derive(Debug)]
+enum SubszError {
+    RequestError(reqwest::Error),
+    JsonError(serde_json::Error),
+}
+
+impl std::error::Error for SubszError {}
+
+impl fmt::Display for SubszError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            SubszError::RequestError(e) => write!(f, "Request error: {}", e),
+            SubszError::JsonError(e) => write!(f, "JSON error: {}", e),
+        }
+    }
+}
+
+impl From<reqwest::Error> for SubszError {
+    fn from(err: reqwest::Error) -> Self {
+        SubszError::RequestError(err)
+    }
+}
+
+impl From<serde_json::Error> for SubszError {
+    fn from(err: serde_json::Error) -> Self {
+        SubszError::JsonError(err)
     }
 }
 
@@ -190,6 +220,11 @@ async fn main() -> rusqlite::Result<()> {
             },
         );
 
+    let get_server_subjects_route = warp::path!("server" / i64 / "subjects")
+        .and(warp::get())
+        .and(db_conn_filter.clone())
+        .and_then(get_server_subjects);
+
     let api_route = warp::path("api").and(warp::path("state")).and(
         get_app_state_route
             .or(new_client_route)
@@ -198,7 +233,9 @@ async fn main() -> rusqlite::Result<()> {
             .or(new_server_route)
             .or(update_server_route)
             .or(delete_server_route)
-            .or(transient_info_route),
+            .or(client_subscribe_route)
+            .or(transient_info_route)
+            .or(get_server_subjects_route),
     );
 
     let route = static_content_route
@@ -449,4 +486,69 @@ async fn handle_client_subscription(
     }
 
     info!("Subscription to {} has ended.", dest);
+}
+
+async fn get_server_subsz(
+    host: String,
+    port: u16,
+    client: &reqwest::Client,
+) -> Result<SubszResponse, SubszError> {
+    let url = format!("http://{}:{}/subsz?subs=true", host, port);
+    let response = client.get(&url).send().await?;
+    response.error_for_status_ref()?;
+    let subsz: SubszResponse = response.json().await?;
+    Ok(subsz)
+}
+
+fn build_subject_hierarchy(subscriptions: Vec<String>) -> Vec<SubjectTreeNode> {
+    let mut root = SubjectTreeNode {
+        id: "root".to_string(),
+        subject_str: "".to_string(),
+        subjects: vec![],
+        selected: false,
+    };
+
+    for subscription in subscriptions {
+        let tokens: Vec<&str> = subscription.split('.').collect();
+        let mut current = &mut root;
+
+        for (i, _token) in tokens.iter().enumerate() {
+            let subject_str = tokens[..=i].join(".");
+            let id = format!("node_{}", subject_str);
+
+            let node_index = current
+                .subjects
+                .iter()
+                .position(|node| node.subject_str == subject_str);
+
+            if let Some(index) = node_index {
+                current = &mut current.subjects[index];
+            } else {
+                let new_node = SubjectTreeNode {
+                    id,
+                    subject_str,
+                    subjects: vec![],
+                    selected: false,
+                };
+                current.subjects.push(new_node);
+                current = current.subjects.last_mut().unwrap();
+            }
+        }
+    }
+
+    root.subjects
+}
+
+async fn get_server_subjects(
+    server_id: i64,
+    conn: Connection,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let server = sql::get_server(&conn, server_id)
+        .map_err(|e| warp::reject::custom(ServerError::from(e)))?;
+    let client = reqwest::Client::new();
+    let subsz = get_server_subsz(server.host, server.monitoring_port, &client)
+        .await
+        .map_err(|e| warp::reject::custom(ServerError::from(e)))?;
+    let hierarchy = build_subject_hierarchy(subsz.subscriptions);
+    Ok(warp::reply::json(&hierarchy))
 }

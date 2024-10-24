@@ -510,11 +510,10 @@ export default {
     ...mapActions(['updateServer', 'getAppState']),
     ...mapMutations(['selectScreen']),
     editSubjectHierarchy() {
-      this.tabtree = ""
+      this.tabtree = "";
       tabdown.traverse(this.subjectTreeToTabdownTreeRoot(this.server.subjects), function (node) {
         this.tabtree = this.tabtree.concat(this.tabtree.length === 0 ? '' : '\n','\t'.repeat(node.depth) + node.data)
       }.bind(this))
-      // this.tabtree = tabdown.print(this.subjectTreeToTabdownTreeRoot(this.server.subjects))
       this.subjectHierarchyDialogVisible = true
     },
     async saveSubjectTree() {
@@ -582,8 +581,19 @@ export default {
     },
     handleSubjectHierarchyChange(value) {
       this.tabtree = value
-    }
-  }
+    },
+    async fetchSubjects() {
+      try {
+        const subjects = await this.$store.dispatch('fetchServerSubjects', this.server.id);
+        this.server.subjects = subjects;
+      } catch (error) {
+        console.error('Failed to fetch subjects:', error);
+      }
+    },
+  },
+  mounted() {
+    this.fetchSubjects();
+  },
 }
 </script>
 
@@ -654,3 +664,6 @@ span.metric-value-smaller {
   white-space: nowrap;
 }
 </style>
+
+
+

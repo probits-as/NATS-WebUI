@@ -1,6 +1,6 @@
 [package]
 name = "nats-webui"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Theodore Lee <sphqxelzlt@gmail.com>", "Jens Thiel <thielj@gmail.com>"]
 edition = "2018"
 

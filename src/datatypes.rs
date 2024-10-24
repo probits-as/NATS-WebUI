@@ -60,18 +60,12 @@ impl NatsServer {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct VarzBroadcastMessage {
-    pub server_id: i64,
-    varz: ServerVarz,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct SubjectTreeNode {
-    id: String,
-    subject_str: String,
-    subjects: Vec<SubjectTreeNode>,
-    selected: bool,
+    pub id: String,
+    pub subject_str: String,
+    pub subjects: Vec<SubjectTreeNode>,
+    pub selected: bool,
 }
 
 impl SubjectTreeNode {
@@ -270,4 +264,23 @@ impl From<serde_json::Error> for VarzError {
     fn from(err: serde_json::Error) -> Self {
         VarzError::JsonError(err)
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubszResponse {
+    pub num_subscriptions: usize,
+    pub num_cache: usize,
+    pub num_inserts: usize,
+    pub num_removes: usize,
+    pub num_matches: usize,
+    pub cache_hit_rate: f64,
+    pub max_fanout: usize,
+    pub avg_fanout: f64,
+    pub subscriptions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VarzBroadcastMessage {
+    pub server_id: i64,
+    pub varz: ServerVarz,
 }

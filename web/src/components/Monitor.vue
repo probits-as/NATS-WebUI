@@ -261,12 +261,15 @@
       <div id="subjects" style="flex: 1 0 360px; padding: 0px; text-align: left; overflow-y: auto;">
         <div style="display: flex; flex-direction: row; justify-content: space-between; align-items: center; padding-right: 24px;">
           <h1 style="margin: 8px 0px;">Server Subject Hierarchy</h1>
-          <el-button @click="editSubjectHierarchy" icon="el-icon-edit">Edit</el-button>
+          <el-button @click="refreshSubjects" icon="el-icon-refresh">Refresh</el-button>
         </div>
         <el-tree
           :data="server.subjects"
           :props="{ label: 'subject_str', children: 'subjects' }"
           @node-click="handleNodeClick"
+          :load="loadNode"
+          lazy
+          :loading="server.subjectsLoading"
         >
         </el-tree>
         <!-- <h1>Publications</h1>
@@ -519,64 +522,6 @@ export default {
   methods: {
     ...mapActions(['updateServer', 'getAppState']),
     ...mapMutations(['selectScreen']),
-    editSubjectHierarchy() {
-      this.tabtree = "";
-      tabdown.traverse(this.subjectTreeToTabdownTreeRoot(this.server.subjects), function (node) {
-        this.tabtree = this.tabtree.concat(this.tabtree.length === 0 ? '' : '\n','\t'.repeat(node.depth) + node.data)
-      }.bind(this))
-      this.subjectHierarchyDialogVisible = true
-    },
-    async saveSubjectTree() {
-      let server = JSON.parse(JSON.stringify(this.server))
-      server.subjects = this.tabdownTreeToSubjectTree(tabdown.parse(this.tabtree.replace(/ {2}/g, '\t').split('\n'), '\t'), "")
-      await this.updateServer(server)
-      await this.getAppState()
-      this.subjectHierarchyDialogVisible = false
-    },
-    subjectTreeToTabdownTree(tree, parent, depth) {
-      let node = {
-        data: tree.subject_str,
-        depth: depth,
-        parent: parent,
-        children: [],
-        tabcount: 0
-      }
-      for (var i in tree.subjects) {
-        let child_node = tree.subjects[i]
-        node.children.push(this.subjectTreeToTabdownTree(child_node, node, depth+1))
-      }
-      return node
-    },
-    subjectTreeToTabdownTreeRoot(nodes) {
-      let node = {
-        data: null,
-        depth: -1,
-        parent: null,
-        children:[]
-      }
-      for (var i in nodes) {
-        let child_node = nodes[i]
-        node.children.push(this.subjectTreeToTabdownTree(child_node, node, 0))
-      }
-      return node
-    },
-    tabdownTreeToSubjectTree(tree, idPrefix) {
-      let subjectTreeNodes = []
-      for (var i in tree.children) {
-        let node = tree.children[i]
-        let subjectTreeNode = {
-          id: idPrefix + i.toString(),
-          subject_str: node.data,
-          subjects: this.tabdownTreeToSubjectTree(node, idPrefix + i.toString() + "-"),
-          selected: false
-        }
-        subjectTreeNodes.push(subjectTreeNode)
-      }
-      return subjectTreeNodes
-    },
-    checkIsLeaf() {
-      return false
-    },
     handleBreadcrumb() {
       this.selectScreen({isServer: true, index: -1})
     },
@@ -614,10 +559,23 @@ export default {
     },
     async refreshSubjects() {
       try {
+        this.$set(this.server, 'subjectsLoading', true);
         const response = await this.$axios.get(`/api/servers/${this.server.id}/subjects`);
-        this.server.subjects = response.data;
+        this.$set(this.server, 'subjects', response.data);
       } catch (error) {
         console.error('Failed to refresh subjects:', error);
+      } finally {
+        this.$set(this.server, 'subjectsLoading', false);
+      }
+    },
+    refreshSubjects() {
+      this.fetchSubjects();
+    },
+    loadNode(node, resolve) {
+      if (node.level === 0) {
+        resolve(this.server.subjects);
+      } else {
+        resolve(node.data.subjects);
       }
     },
   },
@@ -698,6 +656,11 @@ span.metric-value-smaller {
   white-space: nowrap;
 }
 </style>
+
+
+
+
+
 
 
 

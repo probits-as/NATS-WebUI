@@ -594,7 +594,11 @@ async fn get_server_subjects(
             warp::reject::custom(ServerError::from(e))
         })?;
     debug!("Retrieved subsz: {:?}", subsz);
-    let hierarchy = build_subject_hierarchy(subsz);
+
+    // Get existing subjects from the server
+    let existing_subjects = server.subjects;
+
+    let hierarchy = build_subject_hierarchy(subsz, existing_subjects);
 
     // Update the server's subjects in the database
     sql::update_server_subjects(&conn, server_id, &hierarchy).map_err(|e| {

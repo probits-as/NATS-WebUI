@@ -494,13 +494,19 @@ async fn get_server_subsz(
     client: &reqwest::Client,
 ) -> Result<SubszResponse, SubszError> {
     let url = format!("http://{}:{}/subsz?subs=true", host, port);
+    debug!("Fetching subsz from URL: {}", url);
     let response = client.get(&url).send().await?;
     response.error_for_status_ref()?;
     let subsz: SubszResponse = response.json().await?;
+    debug!("Received subsz response: {:?}", subsz);
     Ok(subsz)
 }
 
-fn build_subject_hierarchy(subscriptions: Vec<String>) -> Vec<SubjectTreeNode> {
+fn build_subject_hierarchy(subsz: SubszResponse) -> Vec<SubjectTreeNode> {
+    debug!(
+        "Building subject hierarchy from {} subscriptions",
+        subsz.subscriptions_list.len()
+    );
     let mut root = SubjectTreeNode {
         id: "root".to_string(),
         subject_str: "".to_string(),
@@ -508,8 +514,8 @@ fn build_subject_hierarchy(subscriptions: Vec<String>) -> Vec<SubjectTreeNode> {
         selected: false,
     };
 
-    for subscription in subscriptions {
-        let tokens: Vec<&str> = subscription.split('.').collect();
+    for subscription in subsz.subscriptions_list {
+        let tokens: Vec<&str> = subscription.subject.split('.').collect();
         let mut current = &mut root;
 
         for (i, _token) in tokens.iter().enumerate() {
@@ -536,6 +542,10 @@ fn build_subject_hierarchy(subscriptions: Vec<String>) -> Vec<SubjectTreeNode> {
         }
     }
 
+    debug!(
+        "Built subject hierarchy with {} top-level subjects",
+        root.subjects.len()
+    );
     root.subjects
 }
 
@@ -549,6 +559,10 @@ async fn get_server_subjects(
     let subsz = get_server_subsz(server.host, server.monitoring_port, &client)
         .await
         .map_err(|e| warp::reject::custom(ServerError::from(e)))?;
-    let hierarchy = build_subject_hierarchy(subsz.subscriptions);
+    let hierarchy = build_subject_hierarchy(subsz);
+    debug!(
+        "Returning subject hierarchy with {} top-level subjects",
+        hierarchy.len()
+    );
     Ok(warp::reply::json(&hierarchy))
 }

@@ -276,7 +276,19 @@ pub struct SubszResponse {
     pub cache_hit_rate: f64,
     pub max_fanout: usize,
     pub avg_fanout: f64,
-    pub subscriptions: Vec<String>,
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub subscriptions_list: Vec<Subscription>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Subscription {
+    pub account: String,
+    pub subject: String,
+    pub sid: String,
+    pub msgs: usize,
+    pub cid: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

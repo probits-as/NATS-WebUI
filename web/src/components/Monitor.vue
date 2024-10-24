@@ -251,7 +251,7 @@
                 Server ID
               </span>
               <span class="metric-value-small">
-                {{ server.varz.server_id}}
+                {{ serverVarz ? serverVarz.server_id : 'N/A' }}
               </span>
             </div>
           </div>
@@ -307,7 +307,10 @@ export default {
     ...mapState({
       server: s => s.transient.serversMap[s.transient.selectedServer],
       selected_index: s => s.transient.selectedServer
-    })
+    }),
+    serverVarz() {
+      return this.server && this.server.varz ? this.server.varz : null;
+    },
   },
   data() {
     return {
@@ -594,9 +597,23 @@ export default {
         console.error('Failed to fetch subjects:', error);
       }
     },
+    startPeriodicUpdates() {
+      this.updateInterval = setInterval(() => {
+        this.fetchSubjects();
+      }, 30000); // Update every 30 seconds
+    },
+    stopPeriodicUpdates() {
+      if (this.updateInterval) {
+        clearInterval(this.updateInterval);
+      }
+    },
   },
   mounted() {
     this.fetchSubjects();
+    this.startPeriodicUpdates();
+  },
+  beforeDestroy() {
+    this.stopPeriodicUpdates();
   },
 }
 </script>
@@ -668,6 +685,9 @@ span.metric-value-smaller {
   white-space: nowrap;
 }
 </style>
+
+
+
 
 
 

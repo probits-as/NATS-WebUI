@@ -66,6 +66,13 @@ pub struct SubjectTreeNode {
     pub subject_str: String,
     pub subjects: Vec<SubjectTreeNode>,
     pub selected: bool,
+    pub source: SubjectSource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+pub enum SubjectSource {
+    Server,
+    User,
 }
 
 impl SubjectTreeNode {

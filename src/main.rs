@@ -502,20 +502,25 @@ async fn get_server_subsz(
     Ok(subsz)
 }
 
-fn build_subject_hierarchy(subsz: SubszResponse) -> Vec<SubjectTreeNode> {
-    debug!(
-        "Building subject hierarchy from {} subscriptions",
-        subsz.subscriptions_list.len()
-    );
+fn build_subject_hierarchy(
+    subsz: SubszResponse,
+    existing_subjects: Vec<SubjectTreeNode>,
+) -> Vec<SubjectTreeNode> {
     let mut root = SubjectTreeNode {
         id: "root".to_string(),
         subject_str: "".to_string(),
         subjects: vec![],
         selected: false,
+        source: SubjectSource::Server,
     };
 
-    for (index, subscription) in subsz.subscriptions_list.iter().enumerate() {
-        debug!("Processing subscription {}: {:?}", index, subscription);
+    // First, add all existing subjects (both user-added and server-populated)
+    for existing_subject in existing_subjects {
+        add_subject_to_hierarchy(&mut root, existing_subject);
+    }
+
+    // Then, add new subjects from the server
+    for subscription in subsz.subscriptions_list {
         let tokens: Vec<&str> = subscription.subject.split('.').collect();
         let mut current = &mut root;
 
@@ -523,20 +528,19 @@ fn build_subject_hierarchy(subsz: SubszResponse) -> Vec<SubjectTreeNode> {
             let subject_str = tokens[..=i].join(".");
             let id = format!("node_{}", subject_str);
 
-            let node_index = current
+            if let Some(index) = current
                 .subjects
                 .iter()
-                .position(|node| node.subject_str == subject_str);
-
-            if let Some(index) = node_index {
+                .position(|node| node.subject_str == subject_str)
+            {
                 current = &mut current.subjects[index];
             } else {
-                debug!("Adding new node: {}", subject_str);
                 let new_node = SubjectTreeNode {
                     id,
                     subject_str,
                     subjects: vec![],
                     selected: false,
+                    source: SubjectSource::Server,
                 };
                 current.subjects.push(new_node);
                 current = current.subjects.last_mut().unwrap();
@@ -544,11 +548,32 @@ fn build_subject_hierarchy(subsz: SubszResponse) -> Vec<SubjectTreeNode> {
         }
     }
 
-    debug!(
-        "Built subject hierarchy with {} top-level subjects",
-        root.subjects.len()
-    );
     root.subjects
+}
+
+fn add_subject_to_hierarchy(root: &mut SubjectTreeNode, subject: SubjectTreeNode) {
+    let tokens: Vec<&str> = subject.subject_str.split('.').collect();
+    let mut current = root;
+
+    for (i, _token) in tokens.iter().enumerate() {
+        let subject_str = tokens[..=i].join(".");
+        if let Some(index) = current
+            .subjects
+            .iter()
+            .position(|node| node.subject_str == subject_str)
+        {
+            current = &mut current.subjects[index];
+        } else {
+            current.subjects.push(SubjectTreeNode {
+                id: format!("node_{}", subject_str),
+                subject_str,
+                subjects: vec![],
+                selected: false,
+                source: subject.source.clone(),
+            });
+            current = current.subjects.last_mut().unwrap();
+        }
+    }
 }
 
 async fn get_server_subjects(
@@ -569,7 +594,11 @@ async fn get_server_subjects(
             warp::reject::custom(ServerError::from(e))
         })?;
     debug!("Retrieved subsz: {:?}", subsz);
-    let hierarchy = build_subject_hierarchy(subsz);
+    let existing_subjects = sql::get_subjects(&conn, server_id).map_err(|e| {
+        error!("Failed to get subjects from database: {:?}", e);
+        warp::reject::custom(ServerError::from(e))
+    })?;
+    let hierarchy = build_subject_hierarchy(subsz, existing_subjects);
     debug!(
         "Built subject hierarchy for server {} with {} top-level subjects",
         server_id,

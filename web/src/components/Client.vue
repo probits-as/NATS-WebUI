@@ -47,6 +47,7 @@
     </el-container>
     <el-aside style="border-left: 1px solid #e6e6e6; flex: 1 0 120px; padding: 12px;">
       <h1 style="text-align: left; font-size: 1em; margin: 8px 0px;">Server Subject Hierarchy</h1>
+      <el-button @click="refreshSubjects" icon="el-icon-refresh" size="mini" style="margin-bottom: 8px;">Refresh</el-button>
       <el-tree ref="tree" :data="server.subjects" empty-text="No subjects configured for this server." default-expand-all node-key="id"
         :props="{label: 'subject_str', children: 'subjects', disabled: false, isLeaf: checkIsLeaf}" 
         show-checkbox @check="handleCheckChange" :default-checked-keys="checkedKeys" check-strictly>
@@ -175,6 +176,13 @@ export default {
     async handleFilterCheckChange() {
       let client = JSON.parse(JSON.stringify(this.client))
       await this.updateClient(client)
+    },
+    async refreshSubjects() {
+      try {
+        await this.$store.dispatch('fetchServerSubjects', this.server.id);
+      } catch (error) {
+        console.error('Failed to refresh subjects:', error);
+      }
     }
   },
   mounted () {
@@ -206,6 +214,17 @@ export default {
         }
       }
     }.bind(this), 200)
+
+    // Set up automatic refresh every 30 seconds
+    this.refreshInterval = setInterval(() => {
+      this.refreshSubjects();
+    }, 30000);
+  },
+  beforeDestroy() {
+    // Clear the refresh interval when the component is destroyed
+    if (this.refreshInterval) {
+      clearInterval(this.refreshInterval);
+    }
   }
 }
 </script>
